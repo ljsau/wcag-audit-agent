@@ -32,6 +32,7 @@ import asyncio
 import json
 import re
 import time
+import uuid
 from typing import Any
 
 import sys
@@ -42,9 +43,9 @@ from google.adk.runners import InMemoryRunner
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from agents.crawler_agent   import crawler_agent, structure_dom_data, detect_spa_and_suggest_retry
+from agents.crawler_agent   import crawler_agent, structure_dom_data, detect_spa_and_suggest_retry, parse_html_for_audit
 from agents.contrast_agent  import contrast_agent
-from agents.semantic_agent  import semantic_agent
+from agents.semantic_agent  import semantic_agent, run_semantic_checks_direct
 from agents.aria_agent      import aria_agent
 from agents.evaluator_agent import evaluator_agent
 from report.report_generator import generate_report
@@ -248,21 +249,22 @@ async def _crawl_page(url: str) -> dict:
             return json.loads(dom_data_result)
 
 
-async def run_audit_pipeline(url: str) -> str:
+async def run_audit_pipeline(url: str, html_content: str | None = None) -> str:
     """
     Runs the full WCAG audit pipeline: crawl → parallel specialists →
     evaluator triage → report generation. Returns the Markdown report.
 
-    Call this after validating the URL with validate_url.
-    This tool handles the entire DAG — do not call sub-agents directly.
-
     Args:
-        url: A validated public URL to audit.
+        url:          A validated public URL to audit.
+        html_content: Optional pre-fetched HTML string. When provided the
+                      structural crawl is skipped and this HTML is parsed
+                      directly — useful for bot-protected sites where the
+                      user provides HTML copied from their real browser.
 
     Returns:
         A complete Markdown accessibility audit report.
     """
-    return await _run_audit_pipeline_async(url)
+    return await _run_audit_pipeline_async(url, html_content=html_content)
 
 
 def _extract_json(text: str) -> dict | None:
@@ -299,13 +301,19 @@ def _extract_json(text: str) -> dict | None:
     return None
 
 
-async def _run_audit_pipeline_async(url: str) -> str:
+async def _run_audit_pipeline_async(url: str, html_content: str | None = None) -> str:
     """Async implementation of the audit pipeline."""
     session_ts = str(int(time.time()))
     security_notes = []
 
-    # Step 1: CRAWL (pure Python — no LLM, calls browser MCP directly)
-    crawl_data = await _crawl_page(url)
+    # Step 1: CRAWL
+    # When the caller provides pre-fetched HTML (HTML input mode), parse it
+    # directly — no network request, no bot-detection risk.
+    # Otherwise fetch the page via browser MCP as normal.
+    if html_content:
+        crawl_data = parse_html_for_audit(url, html_content)
+    else:
+        crawl_data = await _crawl_page(url)
     if not crawl_data:
         return generate_report(json.dumps({
             "url": url,
@@ -355,6 +363,8 @@ async def _run_audit_pipeline_async(url: str) -> str:
     semantic_input = json.dumps({
         "url": dom_data.get("url", url),
         "task": "run_semantic_check",
+        "page_title": dom_data.get("page_title", ""),
+        "html_lang": dom_data.get("html_lang", ""),
         "headings": dom_data.get("headings", []),
         "images": dom_data.get("images", []),
         "landmarks": dom_data.get("landmarks", []),
@@ -364,11 +374,13 @@ async def _run_audit_pipeline_async(url: str) -> str:
         "task": "run_aria_check",
     })
 
-    contrast_result, semantic_result, aria_result = await asyncio.gather(
+    contrast_result, aria_result = await asyncio.gather(
         _run_sub_agent(contrast_agent, contrast_input, f"contrast_{session_ts}"),
-        _run_sub_agent(semantic_agent, semantic_input, f"semantic_{session_ts}"),
         _run_sub_agent(aria_agent, aria_input, f"aria_{session_ts}"),
     )
+    # Semantic checks are deterministic Python — call directly to avoid LLM
+    # mangling large JSON inputs (the same fix applied to the crawler in ADK2x).
+    semantic_result = run_semantic_checks_direct(dom_data)
 
     # Collect findings from all specialists
     all_findings = []
@@ -394,6 +406,12 @@ async def _run_audit_pipeline_async(url: str) -> str:
             })
 
     # Step 4: TRIAGE via evaluator
+    # Assign stable IDs before sending so we can merge triage results back.
+    # deduplicate_findings (called inside the evaluator) preserves existing IDs.
+    for f in all_findings:
+        if not f.get("id"):
+            f["id"] = str(uuid.uuid4())
+
     eval_input = json.dumps(all_findings)
     eval_result = await _run_sub_agent(
         evaluator_agent, eval_input, f"eval_{session_ts}"
@@ -409,6 +427,18 @@ async def _run_audit_pipeline_async(url: str) -> str:
             triaged = all_findings
     except json.JSONDecodeError:
         triaged = all_findings
+
+    # Merge evaluator decisions (severity, rationale, wcag corrections) back
+    # onto the original findings, which carry description/element/fix fields
+    # that the Triage schema doesn't include.
+    findings_by_id = {f["id"]: f for f in all_findings}
+    merged = []
+    for t in triaged:
+        base = dict(findings_by_id.get(t.get("id", ""), {}))
+        base.update(t)  # evaluator fields override where they overlap
+        merged.append(base)
+    if merged:
+        triaged = merged
 
     # Step 5: REPORT
     report_input = json.dumps({

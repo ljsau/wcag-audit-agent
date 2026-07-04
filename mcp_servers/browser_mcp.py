@@ -24,6 +24,9 @@ import asyncio
 import json
 import re
 import os
+import ssl
+import urllib.request
+from html.parser import HTMLParser
 from typing import Any
 
 from mcp.server import Server
@@ -186,6 +189,193 @@ async def list_tools() -> list[Tool]:
 # Tool implementations
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# HTTP-based structural snapshot — no browser, no fingerprinting
+#
+# SSR frameworks (Next.js, Nuxt, SvelteKit) render a complete HTML document
+# on the server: <html lang>, <title>, <nav>, <main>, headings, images, links.
+# A plain HTTPS GET with browser headers is byte-for-byte what a real browser
+# sends first, so WAFs and bot-protection systems cannot distinguish it from a
+# human request. Headless Playwright, by contrast, is detectable at the TLS and
+# HTTP/2 framing layer regardless of any JS-level patches.
+#
+# This path is tried first for get_dom_snapshot. Playwright is the fallback for
+# client-side-only SPAs that render nothing in the initial HTTP response.
+# ---------------------------------------------------------------------------
+
+_HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/125.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-AU,en;q=0.9",
+    "Accept-Encoding": "identity",   # avoid compressed responses; simplifies decoding
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Upgrade-Insecure-Requests": "1",
+}
+
+_SSL_CTX = ssl.create_default_context()
+
+
+class _SSRParser(HTMLParser):
+    """
+    Pulls accessibility-relevant data out of server-rendered HTML in one pass.
+    Handles nested elements correctly (heading text across child spans, etc.).
+    """
+
+    _LANDMARK_BY_TAG = {
+        "main": "main", "nav": "nav", "aside": "aside",
+        "header": "header", "footer": "footer",
+    }
+    _LANDMARK_BY_ROLE = {
+        "main": "main", "navigation": "nav", "complementary": "aside",
+        "banner": "header", "contentinfo": "footer",
+        "search": "search", "form": "form", "region": "region",
+    }
+    _HEADING_TAGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.html_lang = ""
+        self.page_title = ""
+        self.headings: list[dict] = []
+        self.images: list[dict] = []
+        self.landmarks: list[dict] = []
+        self.links: list[dict] = []
+
+        self._in_title = False
+        self._heading_stack: list[tuple[str, list[str], bool]] = []  # (tag, texts, has_id)
+        self._link_stack: list[tuple[dict, list[str]]] = []
+
+    def handle_starttag(self, tag: str, attrs: list) -> None:
+        tag = tag.lower()
+        d = dict(attrs)
+
+        if tag == "html":
+            self.html_lang = d.get("lang", "")
+
+        elif tag == "title":
+            self._in_title = True
+
+        elif tag in self._HEADING_TAGS:
+            self._heading_stack.append((tag, [], bool(d.get("id"))))
+
+        elif tag == "a" and d.get("href"):
+            self._link_stack.append((d, []))
+
+        elif tag == "img":
+            alt = d.get("alt")
+            self.images.append({
+                "src": (d.get("src") or d.get("data-src") or "")[:200],
+                "alt": alt,
+                "has_alt": "alt" in d,
+                "alt_is_empty": alt == "",
+                "role": d.get("role"),
+                "aria_label": d.get("aria-label"),
+                "visible": d.get("aria-hidden") != "true",
+            })
+
+        lm = self._LANDMARK_BY_TAG.get(tag) or self._LANDMARK_BY_ROLE.get(
+            d.get("role", "").lower()
+        )
+        if lm:
+            self.landmarks.append({
+                "role": lm,
+                "tag": tag.upper(),
+                "label": d.get("aria-label") or d.get("aria-labelledby"),
+            })
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+
+        if tag == "title":
+            self._in_title = False
+
+        elif tag in self._HEADING_TAGS and self._heading_stack:
+            # Pop the matching heading (handles mismatch gracefully)
+            for i in range(len(self._heading_stack) - 1, -1, -1):
+                if self._heading_stack[i][0] == tag:
+                    h_tag, texts, has_id = self._heading_stack.pop(i)
+                    text = "".join(texts).strip()[:150]
+                    if text:
+                        self.headings.append({
+                            "level": int(h_tag[1]),
+                            "text": text,
+                            "has_id": has_id,
+                        })
+                    break
+
+        elif tag == "a" and self._link_stack:
+            attrs_d, texts = self._link_stack.pop()
+            self.links.append({
+                "href": attrs_d.get("href", ""),
+                "text": "".join(texts).strip()[:150],
+                "aria_label": attrs_d.get("aria-label"),
+            })
+
+    def handle_data(self, data: str) -> None:
+        if self._in_title:
+            self.page_title += data
+        for _, texts, _ in self._heading_stack:
+            texts.append(data)
+        if self._link_stack:
+            self._link_stack[-1][1].append(data)
+
+
+def _http_snapshot(url: str) -> dict | None:
+    """
+    Fetches a URL via plain HTTPS and parses the server-rendered HTML.
+    Returns structured data (title, html_lang, headings, landmarks, images,
+    links) or None if the page could not be fetched or looks like a
+    bot-protection page.
+
+    This is the primary path for get_dom_snapshot. Playwright is the fallback.
+    """
+    req = urllib.request.Request(url, headers=_HTTP_HEADERS)
+    try:
+        with urllib.request.urlopen(req, timeout=20, context=_SSL_CTX) as resp:
+            if "html" not in resp.headers.get_content_type():
+                return None
+            raw = resp.read(600_000)
+        html = raw.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+
+    # Bot-protection pages are typically tiny (<2 KB) and structurally empty
+    if len(html) < 2000 or "<html" not in html.lower():
+        return None
+
+    parser = _SSRParser()
+    try:
+        parser.feed(html)
+    except Exception:
+        return None
+
+    # If we got nothing structural, treat it as a failed fetch
+    if not any([
+        parser.html_lang, parser.page_title,
+        parser.headings, parser.landmarks,
+    ]):
+        return None
+
+    return {
+        "title":      parser.page_title.strip(),
+        "html_lang":  parser.html_lang,
+        "headings":   parser.headings,
+        "images":     parser.images,
+        "landmarks":  parser.landmarks,
+        "links":      parser.links,
+        "html":       html,
+        "fetch_method": "http",
+    }
+
+
 async def _make_sandboxed_page(playwright, url: str, wait_for: str = "networkidle",
                                 extra_wait_ms: int = 0):
     """
@@ -197,15 +387,67 @@ async def _make_sandboxed_page(playwright, url: str, wait_for: str = "networkidl
     - Downloads blocked
     - Geolocation, notifications, camera, mic blocked
     - No custom JS injection
+
+    Bot-detection mitigation:
+    - Realistic user-agent and viewport so sites serve the same page real users see
+    - navigator.webdriver removed (the primary JS signal sites use to detect headless)
+    - Without this, sites like Gumtree serve a bot-protection page with no meaningful
+      DOM content, causing every structural check to false-positive.
     """
     browser = await playwright.chromium.launch(headless=True)
     context = await browser.new_context(
         accept_downloads=False,
         java_script_enabled=True,       # needed for SPA rendering
         bypass_csp=False,               # respect the site's CSP
-        # Explicitly deny sensitive permissions
         permissions=[],
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/125.0.0.0 Safari/537.36"
+        ),
+        viewport={"width": 1280, "height": 800},
+        locale="en-AU",
     )
+
+    # Stealth init: mask the JS signals that bot-protection systems use to detect
+    # headless Playwright. navigator.webdriver alone isn't enough — Cloudflare and
+    # similar WAFs also check plugins (headless = 0), window.chrome (missing in
+    # headless), and navigator.permissions behaviour.
+    await context.add_init_script("""
+        // 1. Remove the primary automation flag
+        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+
+        // 2. Fake a minimal plugin list (headless has 0; real Chrome has several)
+        Object.defineProperty(navigator, 'plugins', {
+            get: () => Object.assign(
+                [
+                    {name:'Chrome PDF Plugin', filename:'internal-pdf-viewer', description:''},
+                    {name:'Chrome PDF Viewer', filename:'mhjfbmdgcfjbbpaeojofohoefgiehjai', description:''},
+                    {name:'Native Client', filename:'internal-nacl-plugin', description:''},
+                ],
+                {item: function(i){return this[i];}, namedItem: function(n){return null;}, refresh: function(){}}
+            )
+        });
+
+        // 3. Add the chrome runtime object headless Chrome is missing
+        if (!window.chrome) {
+            window.chrome = {
+                runtime: {},
+                loadTimes: function(){},
+                csi: function(){},
+                app: {}
+            };
+        }
+
+        // 4. Patch permissions.query so it doesn't reveal automation state
+        if (navigator.permissions && navigator.permissions.query) {
+            const _origQuery = navigator.permissions.query.bind(navigator.permissions);
+            navigator.permissions.query = (params) =>
+                params && params.name === 'notifications'
+                    ? Promise.resolve({state: 'default', onchange: null})
+                    : _origQuery(params);
+        }
+    """)
 
     # Block resource types that aren't needed for accessibility auditing
     # This also reduces attack surface from malicious redirects
@@ -251,6 +493,22 @@ async def _tool_fetch_page(arguments: dict) -> list[TextContent]:
         try:
             html = await page.content()
             title = await page.title()
+            # SSR frameworks (Next.js etc.) render <title> as whitespace initially.
+            # Try HTTP snapshot for a reliable title before accepting a blank one.
+            if not title.strip():
+                try:
+                    await page.wait_for_function(
+                        "() => document.title.trim().length > 0",
+                        timeout=3000,
+                    )
+                    title = await page.title()
+                except Exception:
+                    pass
+            # Last resort: pull title from the HTTP snapshot (unaffected by bot detection)
+            if not title.strip():
+                http_data = _http_snapshot(url)
+                if http_data and http_data.get("title"):
+                    title = http_data["title"]
 
             # Collect internal links — read-only eval, no DOM mutation
             links = await page.evaluate("""
@@ -346,10 +604,38 @@ async def _tool_get_computed_styles(arguments: dict) -> list[TextContent]:
 
 async def _tool_get_dom_snapshot(arguments: dict) -> list[TextContent]:
     url = arguments["url"]
-    interesting_only = arguments.get("interesting_only", True)
 
     _validate_url(url)
 
+    # --- Primary path: plain HTTP fetch + HTML parsing ---
+    # Bypasses all browser fingerprinting. Works for any SSR framework
+    # (Next.js, Nuxt, SvelteKit, Rails, Django, etc.) that sends structural
+    # HTML in the first response. Falls through to Playwright only when the
+    # HTTP response is empty or clearly a client-side-only SPA.
+    http_data = _http_snapshot(url)
+    if http_data is not None:
+        # Build a minimal accessibility tree for check_link_text
+        link_nodes = [
+            {
+                "role": "link",
+                "name": lnk.get("aria_label") or lnk.get("text") or lnk.get("href", ""),
+            }
+            for lnk in http_data.get("links", [])
+        ]
+        accessibility_tree = {"role": "WebArea", "children": link_nodes}
+
+        result = {
+            "url": url,
+            "accessibility_tree": accessibility_tree,
+            "headings":  http_data["headings"],
+            "images":    http_data["images"],
+            "landmarks": http_data["landmarks"],
+            "html_lang": http_data["html_lang"],
+            "fetch_method": "http",
+        }
+        return [TextContent(type="text", text=json.dumps(result))]
+
+    # --- Fallback: Playwright for JS-only SPAs ---
     async with async_playwright() as p:
         try:
             browser, context, page = await _make_sandboxed_page(p, url)
@@ -398,22 +684,18 @@ async def _tool_get_dom_snapshot(arguments: dict) -> list[TextContent]:
                 }
             """)
 
-            # Extract images for alt text check
             images = await page.evaluate("""
-                () => {
-                    return Array.from(document.querySelectorAll('img')).map(img => ({
-                        src: img.src.slice(0, 200),
-                        alt: img.getAttribute('alt'),
-                        has_alt: img.hasAttribute('alt'),
-                        alt_is_empty: img.getAttribute('alt') === '',
-                        role: img.getAttribute('role'),
-                        aria_label: img.getAttribute('aria-label'),
-                        visible: img.getBoundingClientRect().width > 0
-                    }));
-                }
+                () => Array.from(document.querySelectorAll('img')).map(img => ({
+                    src: img.src.slice(0, 200),
+                    alt: img.getAttribute('alt'),
+                    has_alt: img.hasAttribute('alt'),
+                    alt_is_empty: img.getAttribute('alt') === '',
+                    role: img.getAttribute('role'),
+                    aria_label: img.getAttribute('aria-label'),
+                    visible: img.getBoundingClientRect().width > 0
+                }))
             """)
 
-            # Extract landmark regions
             landmarks = await page.evaluate("""
                 () => {
                     const roles = ['main','nav','aside','header','footer',
@@ -421,23 +703,25 @@ async def _tool_get_dom_snapshot(arguments: dict) -> list[TextContent]:
                                    'banner','contentinfo'];
                     const result = [];
                     roles.forEach(role => {
-                        const byRole = document.querySelectorAll(`[role="${role}"]`);
+                        const byRole = document.querySelectorAll('[role="' + role + '"]');
                         const byTag = (role === 'nav') ? document.querySelectorAll('nav') :
                                       (role === 'main') ? document.querySelectorAll('main') :
                                       (role === 'aside') ? document.querySelectorAll('aside') :
                                       [];
                         const combined = new Set([...byRole, ...byTag]);
-                        combined.forEach(el => {
-                            result.push({
-                                role: role,
-                                tag: el.tagName,
-                                label: el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || null
-                            });
-                        });
+                        combined.forEach(el => result.push({
+                            role: role,
+                            tag: el.tagName,
+                            label: el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || null
+                        }));
                     });
                     return result;
                 }
             """)
+
+            html_lang = await page.evaluate(
+                "() => document.documentElement.getAttribute('lang') || ''"
+            )
 
         finally:
             await browser.close()
@@ -445,11 +729,12 @@ async def _tool_get_dom_snapshot(arguments: dict) -> list[TextContent]:
     result = {
         "url": url,
         "accessibility_tree": snapshot,
-        "headings": headings,
-        "images": images,
+        "headings":  headings,
+        "images":    images,
         "landmarks": landmarks,
+        "html_lang": html_lang,
+        "fetch_method": "playwright",
     }
-
     return [TextContent(type="text", text=json.dumps(result))]
 
 
@@ -471,6 +756,17 @@ async def _tool_simulate_keyboard_nav(arguments: dict) -> list[TextContent]:
             focus_order = []
             seen_elements = set()
             trap_detected = False
+
+            # Count DOM interactive elements before simulating Tab.
+            # Used downstream to distinguish "no focusable elements reached"
+            # from "page didn't render properly in headless browser".
+            interactive_element_count = await page.evaluate("""
+                () => document.querySelectorAll(
+                    'a[href], button, input, select, textarea, ' +
+                    '[tabindex]:not([tabindex="-1"]), ' +
+                    '[role="button"], [role="link"], [role="checkbox"], [role="radio"]'
+                ).length
+            """)
 
             # Start from page body
             await page.focus("body")
@@ -525,6 +821,7 @@ async def _tool_simulate_keyboard_nav(arguments: dict) -> list[TextContent]:
     result = {
         "url": url,
         "steps_taken": len(focus_order),
+        "interactive_element_count": interactive_element_count,
         "trap_detected": trap_detected,
         "focus_order": focus_order,
         "missing_focus_indicators": missing_focus_indicators,

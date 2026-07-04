@@ -184,7 +184,37 @@ async def _tool_capture_screenshot(arguments: dict) -> list[TextContent]:
             viewport={"width": viewport_width, "height": viewport_height},
             accept_downloads=False,
             permissions=[],
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            ),
+            locale="en-AU",
         )
+        # Stealth init — same script as browser_mcp._make_sandboxed_page
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => Object.assign(
+                    [
+                        {name:'Chrome PDF Plugin', filename:'internal-pdf-viewer', description:''},
+                        {name:'Chrome PDF Viewer', filename:'mhjfbmdgcfjbbpaeojofohoefgiehjai', description:''},
+                        {name:'Native Client', filename:'internal-nacl-plugin', description:''},
+                    ],
+                    {item: function(i){return this[i];}, namedItem: function(n){return null;}, refresh: function(){}}
+                )
+            });
+            if (!window.chrome) {
+                window.chrome = {runtime: {}, loadTimes: function(){}, csi: function(){}, app: {}};
+            }
+            if (navigator.permissions && navigator.permissions.query) {
+                const _origQuery = navigator.permissions.query.bind(navigator.permissions);
+                navigator.permissions.query = (params) =>
+                    params && params.name === 'notifications'
+                        ? Promise.resolve({state: 'default', onchange: null})
+                        : _origQuery(params);
+            }
+        """)
 
         # Route: block media and websockets (not needed for screenshots)
         await context.route("**/*", lambda route: (

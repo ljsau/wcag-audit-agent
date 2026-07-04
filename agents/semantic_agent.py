@@ -343,6 +343,131 @@ def check_link_text(accessibility_tree_json: str) -> str:
     })
 
 
+def check_page_title(page_title: str) -> str:
+    """
+    Checks WCAG 2.4.2 — Page Titled. A page must have a non-empty <title>
+    that describes its topic or purpose.
+
+    Uses the title captured by the main crawler (fetch_page → page.title()),
+    not a separate browser session, so bot-protection pages that return a
+    different document to headless browsers won't cause false positives here.
+
+    Args:
+        page_title: The page title string from dom_data["page_title"].
+
+    Returns:
+        JSON: { findings: [...] }
+    """
+    title = (page_title or "").strip()
+    if not title:
+        return json.dumps({
+            "findings": [{
+                "agent": "semantic",
+                "wcag_criterion": "2.4.2",
+                "element_selector": "title",
+                "element_html_snippet": "<title></title>",
+                "description": (
+                    "The page has no <title> element or the title is empty. "
+                    "Screen readers and browser tabs use the title to identify the page."
+                ),
+                "recommended_fix": (
+                    "Add a descriptive <title> element inside <head>, e.g. "
+                    "<title>Product Search — Acme Store</title>. "
+                    "Titles should describe the page's topic or purpose."
+                ),
+                "severity_raw": "serious",
+            }]
+        })
+    return json.dumps({"findings": []})
+
+
+def check_page_language(html_lang: str) -> str:
+    """
+    Checks WCAG 3.1.1 — Language of Page. The <html> element must have a
+    non-empty lang attribute so screen readers apply the correct pronunciation.
+
+    Uses the lang attribute captured from document.documentElement during crawl.
+    Meta tags (og:locale, DCSext.locale, etc.) are NOT a substitute — WCAG
+    3.1.1 specifically requires the lang attribute on the <html> element.
+
+    Args:
+        html_lang: The value of <html lang="..."> from dom_data["html_lang"].
+
+    Returns:
+        JSON: { findings: [...] }
+    """
+    lang = (html_lang or "").strip()
+    if not lang:
+        return json.dumps({
+            "findings": [{
+                "agent": "semantic",
+                "wcag_criterion": "3.1.1",
+                "element_selector": "html",
+                "element_html_snippet": "<html> (no lang attribute)",
+                "description": (
+                    "The <html> element has no lang attribute. "
+                    "Screen readers cannot determine the page language and will "
+                    "use the user's default, potentially applying wrong pronunciation. "
+                    "Note: meta tags such as og:locale or DCSext.locale do not satisfy "
+                    "this requirement."
+                ),
+                "recommended_fix": (
+                    "Add a lang attribute to the <html> element, e.g. "
+                    "<html lang=\"en-AU\">. Use a valid BCP 47 language tag."
+                ),
+                "severity_raw": "serious",
+            }]
+        })
+    return json.dumps({"findings": []})
+
+
+# ---------------------------------------------------------------------------
+# Direct runner — bypasses the LLM, calls tools in Python
+# Same pattern as _crawl_page() in orchestrator: LLM was just routing inputs
+# to these deterministic tools, and it mangles large JSON on complex pages.
+# ---------------------------------------------------------------------------
+
+def run_semantic_checks_direct(dom_data: dict) -> str:
+    """
+    Runs all semantic checks by calling the tool functions directly in Python.
+    Returns JSON matching the semantic_agent's output_key="findings" format.
+
+    Args:
+        dom_data: The canonical dom_data dict from the crawler/parser.
+
+    Returns:
+        JSON string: {"findings": [...combined findings from all checks...]}
+    """
+    all_findings = []
+
+    for result_json in [
+        check_page_title(dom_data.get("page_title", "")),
+        check_page_language(dom_data.get("html_lang", "")),
+        check_heading_hierarchy(json.dumps(dom_data.get("headings", []))),
+        check_landmark_regions(json.dumps(dom_data.get("landmarks", []))),
+        check_images(json.dumps(dom_data.get("images", []))),
+    ]:
+        try:
+            data = json.loads(result_json)
+            findings = data.get("findings", []) if isinstance(data, dict) else []
+            all_findings.extend(findings)
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+    # check_link_text needs an accessibility tree (Playwright output).
+    # If one is present in dom_data, run it; otherwise skip gracefully.
+    a11y_tree = dom_data.get("accessibility_tree") or dom_data.get("aria_tree")
+    if a11y_tree:
+        try:
+            tree_json = json.dumps(a11y_tree) if not isinstance(a11y_tree, str) else a11y_tree
+            data = json.loads(check_link_text(tree_json))
+            all_findings.extend(data.get("findings", []))
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+    return json.dumps({"findings": all_findings})
+
+
 # ---------------------------------------------------------------------------
 # Semantic agent
 # ---------------------------------------------------------------------------
@@ -352,18 +477,23 @@ You are a WCAG 2.1 semantic HTML specialist. Your domain is the structural
 and textual semantics of web pages.
 
 You receive a JSON payload containing:
-  - headings: list of {level, text, has_id}
-  - images:   list of {src, alt, has_alt, alt_is_empty, role, aria_label, visible}
-  - landmarks: list of {role, tag, label}
+  - url:        the page URL
+  - page_title: the page <title> text captured during crawl
+  - html_lang:  the lang attribute value from the <html> element (empty string if absent)
+  - headings:   list of {level, text, has_id}
+  - images:     list of {src, alt, has_alt, alt_is_empty, role, aria_label, visible}
+  - landmarks:  list of {role, tag, label}
   - accessibility_tree: the full Playwright accessibility tree
 
 Your workflow:
-1. Call check_heading_hierarchy(headings_json) with the headings list.
-2. Call check_landmark_regions(landmarks_json) with the landmarks list.
-3. Call check_images(images_json) with the images list.
-4. Call check_link_text(accessibility_tree_json) with the accessibility tree.
-5. Combine all findings from all four tool calls into a single list.
-6. Return the combined list as JSON under the key "findings".
+1. Call check_page_title(page_title) with the page_title string from the input.
+2. Call check_page_language(html_lang) with the html_lang string from the input.
+3. Call check_heading_hierarchy(headings_json) with the headings list.
+4. Call check_landmark_regions(landmarks_json) with the landmarks list.
+5. Call check_images(images_json) with the images list.
+6. Call check_link_text(accessibility_tree_json) with the accessibility tree.
+7. Combine all findings from all six tool calls into a single list.
+8. Return the combined list as JSON under the key "findings".
 
 IMPORTANT RULES:
 - Run all four checks every time. Do not skip any.
@@ -392,6 +522,8 @@ semantic_agent = Agent(
     instruction=SEMANTIC_INSTRUCTION,
     tools=[
         browser_toolset,
+        check_page_title,
+        check_page_language,
         check_heading_hierarchy,
         check_landmark_regions,
         check_images,

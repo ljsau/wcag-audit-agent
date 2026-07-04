@@ -1,73 +1,98 @@
 # WCAG Accessibility Audit Report
 **URL:** https://www.gumtree.com.au/  
-**Audited:** 2026-06-24 20:20 UTC  
-🟠 **Score: 66/100 (Grade C)** · ❌ WCAG 2.1 AA Fail
+**Audited:** 2026-06-27 01:34 UTC  
+🟡 **Score: 71/100 (Grade B)** · ❌ WCAG 2.1 AA Fail
 
 ---
 ## Executive Summary
 | Severity | Count |
 |---|---|
-| 🔴 Critical | 2 |
-| 🟠 Serious | 2 |
+| 🔴 Critical | 0 |
+| 🟠 Serious | 5 |
 | 🟡 Moderate | 2 |
 | 🔵 Minor | 0 |
-> ❌ **This page fails WCAG 2.1 AA.** 4 issue(s) rated critical or serious must be resolved. These create real barriers for users with disabilities.
+> ❌ **This page fails WCAG 2.1 AA.** 5 issue(s) rated critical or serious must be resolved. These create real barriers for users with disabilities.
 
 ## Top Issues — Immediate Action Required
 _These are the highest-priority findings. Fix these first._
 
-### 1. 🔴 
-
-**Severity:** Critical  
-**Rationale:** If a page contains interactive components, the absence of any focusable elements makes it completely inoperable for keyboard-only users.  
-**WCAG Criterion:** 2.1.1 — Keyboard  
-
-**How to fix:** 
-### 2. 🔴 
-
-**Severity:** Critical  
-**Rationale:** A missing page title disorients users and prevents them from understanding the page's purpose, which can block them from proceeding.  
-**WCAG Criterion:** 2.4.2 — Page Titled  
-
-**How to fix:** 
-### 3. 🟠 
+### 1. 🟠 Page is missing a 'main' landmark region. Screen reader users rely on landmarks to navigate directly to major sections.
 
 **Severity:** Serious  
-**Rationale:** The 'main' landmark is the primary way for screen reader users to find the main content. Its absence is a significant barrier to efficient navigation.  
+**Rationale:** The missing 'main' landmark forces screen reader users to navigate through repetitive header content on every page, significantly impeding access to the primary content.  
 **WCAG Criterion:** 1.3.1 — Info and Relationships  
+**Element:** `[role='main']`  
 
-**How to fix:** 
-### 4. 🟠 
+```html
+(no main landmark found)
+```
+
+**How to fix:** Add a <main> element or role="main" attribute to the appropriate container.
+### 2. 🟠 Image is missing an alt attribute entirely. All img elements must have an alt attribute.
 
 **Severity:** Serious  
-**Rationale:** The missing language attribute can cause screen readers to mispronounce text, potentially making the content incomprehensible to users.  
-**WCAG Criterion:** 3.1.1 — Language of Page  
+**Rationale:** Missing alt text means visually impaired users cannot access information conveyed by the image. If the image is informative, this significantly impedes understanding the content.  
+**WCAG Criterion:** 1.1.1 — Non-text Content  
+**Element:** `img[src*='7yfJgN4yEjjVvxu0mJXn_1Iqg0LVao&consent=1']`  
 
-**How to fix:** 
-### 5. 🟡 
+```html
+<img src="https://ib.adnxs.com/setuid?entity=315&code=rmF6RJW7k8f5A7yfJgN4yEjjVvxu0mJXn_1Iqg0LVao&consent=1">
+```
 
-**Severity:** Moderate  
-**Rationale:** Missing a 'nav' landmark makes it difficult for screen reader users to find the main navigation, but they can still access links sequentially.  
-**WCAG Criterion:** 1.3.1 — Info and Relationships  
+**How to fix:** Add alt="" if the image is decorative, or add alt="[describe what the image shows]" if it conveys information.
+### 3. 🟠 Image is missing an alt attribute entirely. All img elements must have an alt attribute.
 
-**How to fix:** 
+**Severity:** Serious  
+**Rationale:** Missing alt text means visually impaired users cannot access information conveyed by the image. If the image is informative, this significantly impedes understanding the content.  
+**WCAG Criterion:** 1.1.1 — Non-text Content  
+**Element:** `img[src*='373929934993535556230&ev_gtm.js_count=1&']`  
+
+```html
+<img src="https://pixel.everesttech.net/8045/t?ecvid=43306817594582151373929934993535556230&ev_gtm.js_count=1&">
+```
+
+**How to fix:** Add alt="" if the image is decorative, or add alt="[describe what the image shows]" if it conveys information.
+### 4. 🟠 Image is missing an alt attribute entirely. All img elements must have an alt attribute.
+
+**Severity:** Serious  
+**Rationale:** Missing alt text means visually impaired users cannot access information conveyed by the image. If the image is informative, this significantly impedes understanding the content.  
+**WCAG Criterion:** 1.1.1 — Non-text Content  
+**Element:** `img[src*='https://cm.everesttech.net/cm']`  
+
+```html
+<img src="https://cm.everesttech.net/cm">
+```
+
+**How to fix:** Add alt="" if the image is decorative, or add alt="[describe what the image shows]" if it conveys information.
+### 5. 🟠 Link text "See more" is not descriptive. Screen reader users navigating by links cannot determine the link's destination
+
+**Severity:** Serious  
+**Rationale:** Ambiguous link text forces screen reader users to guess the link's destination, significantly impeding their ability to navigate the site effectively.  
+**WCAG Criterion:** 2.4.4 — Link Purpose (In Context)  
+**Element:** `a`  
+
+```html
+<a ...>See more</a>
+```
+
+**How to fix:** Replace "See more" with text that describes the destination or action, e.g. "Read our accessibility policy" instead of "Read more".
 ## All Findings
 | # | Severity | WCAG | Description | Element |
 |---|---|---|---|---|
-| 1 | 🔴 Critical | 2.1.1 | … | `` |
-| 2 | 🔴 Critical | 2.4.2 | … | `` |
-| 3 | 🟠 Serious | 1.3.1 | … | `` |
-| 4 | 🟠 Serious | 3.1.1 | … | `` |
-| 5 | 🟡 Moderate | 1.3.1 | … | `` |
-| 6 | 🟡 Moderate | 1.3.1 | … | `` |
+| 1 | 🟠 Serious | 1.3.1 | Page is missing a 'main' landmark region. Screen reader users rely on landmarks… | `[role='main']` |
+| 2 | 🟠 Serious | 1.1.1 | Image is missing an alt attribute entirely. All img elements must have an alt at… | `img[src*='7yfJgN4yEjjVvxu0mJXn_1Iqg0LVao` |
+| 3 | 🟠 Serious | 1.1.1 | Image is missing an alt attribute entirely. All img elements must have an alt at… | `img[src*='373929934993535556230&ev_gtm.j` |
+| 4 | 🟠 Serious | 1.1.1 | Image is missing an alt attribute entirely. All img elements must have an alt at… | `img[src*='https://cm.everesttech.net/cm'` |
+| 5 | 🟠 Serious | 2.4.4 | Link text "See more" is not descriptive. Screen reader users navigating by links… | `a` |
+| 6 | 🟡 Moderate | 1.3.1 | Heading level skipped: h1 followed by h5. Missing level(s): h2, h3, h4.… | `h5` |
+| 7 | 🟡 Moderate | 1.3.1 | Heading level skipped: h2 followed by h5. Missing level(s): h3, h4.… | `h5` |
 
 ## WCAG Criteria Affected
 | WCAG Criterion | Name | Findings |
 |---|---|---|
+| 1.1.1 | Non-text Content | 🟠 3 |
 | 1.3.1 | Info and Relationships | 🟠 3 |
-| 2.1.1 | Keyboard | 🔴 1 |
-| 2.4.2 | Page Titled | 🔴 1 |
-| 3.1.1 | Language of Page | 🟠 1 |
+| 2.4.4 | Link Purpose (In Context) | 🟠 1 |
 
 ## Pages Audited
 - https://www.gumtree.com.au/
@@ -75,10 +100,10 @@ _These are the highest-priority findings. Fix these first._
 ## Audit Metadata
 | Field | Value |
 |---|---|
-| Audit started | 2026-06-24 20:20 UTC |
+| Audit started | 2026-06-27 01:34 UTC |
 | Pages audited | 1 |
-| Total findings | 6 |
-| Duplicates removed | 1 |
+| Total findings | 7 |
+| Duplicates removed | 0 |
 | google-adk version | 2.3.0 |
 | Playwright version | 1.60.0 |
 | axe-core wrapper | 0.1.7 |

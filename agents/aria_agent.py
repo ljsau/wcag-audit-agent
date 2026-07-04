@@ -202,23 +202,31 @@ def analyse_keyboard_results(keyboard_nav_json: str) -> str:
                 "severity_raw": "serious",
             })
 
-    # WCAG 2.1.1 — check if any interactive elements were skipped entirely
+    # WCAG 2.1.1 — check if interactive elements exist in the DOM but none
+    # were reachable via Tab. Only fire when we have DOM evidence that the
+    # page actually has interactive elements; a zero step-count on its own
+    # is unreliable because bot-protection or SPA hydration delays can prevent
+    # headless Tab simulation from registering focus even on accessible pages.
     steps = nav_data.get("steps_taken", 0)
-    if steps == 0:
+    interactive_count = nav_data.get("interactive_element_count", -1)
+    if steps == 0 and interactive_count > 0:
         findings.append({
             "agent": "aria",
             "wcag_criterion": "2.1.1",
             "element_selector": "document",
-            "element_html_snippet": "(no focusable elements found)",
+            "element_html_snippet": f"(0 of {interactive_count} interactive elements reachable via Tab)",
             "description": (
-                "No focusable elements found on the page. "
-                "If the page has interactive elements, they may not be keyboard accessible."
+                f"The page contains {interactive_count} interactive element(s) in the DOM, "
+                "but none received focus during keyboard Tab simulation. "
+                "If confirmed manually, interactive elements may not be keyboard accessible."
             ),
             "recommended_fix": (
                 "Ensure all interactive elements (buttons, links, form fields) "
-                "are natively focusable or have tabindex=\"0\" added."
+                "are natively focusable or have tabindex=\"0\" added. "
+                "Verify manually — headless browser Tab simulation can be unreliable "
+                "on pages with bot-protection or late-hydrating SPAs."
             ),
-            "severity_raw": "critical",
+            "severity_raw": "serious",
         })
 
     return json.dumps({"findings": findings})
@@ -253,9 +261,12 @@ def analyse_axe_results(axe_scan_json: str) -> str:
 
     violations = scan_data.get("violations", [])
 
-    # ARIA agent only claims ARIA/keyboard-relevant criteria
-    # Contrast (1.4.3) belongs to the contrast agent — don't duplicate
-    aria_relevant_criteria = {"4.1.2", "2.4.3", "2.1.1", "2.4.7", "1.3.1"}
+    # ARIA agent only claims ARIA/keyboard-relevant criteria.
+    # Contrast (1.4.3) → contrast_agent.
+    # Page title (2.4.2), language (3.1.1), landmarks/headings (1.3.1) → semantic_agent
+    #   uses reliable crawl data; axe-core rules for these can false-positive on
+    #   bot-protection pages and Next.js SSR whitespace placeholders.
+    aria_relevant_criteria = {"4.1.2", "2.4.3", "2.1.1", "2.4.7"}
 
     findings = []
     for v in violations:
@@ -381,9 +392,16 @@ YOUR DOMAIN (these criteria belong to you):
   4.1.2  Name, Role, Value
 
 NOT YOUR DOMAIN (refer these to other specialists):
-  1.4.3  Colour contrast         → contrast_agent
-  1.1.1  Image alt text          → semantic_agent
-  1.3.1  Heading/landmark structure → semantic_agent
+  1.4.3  Colour contrast              → contrast_agent
+  1.1.1  Image alt text               → semantic_agent
+  1.3.1  Headings / landmark regions  → semantic_agent (owns all structural checks)
+  2.4.2  Page Titled                  → semantic_agent (uses crawl data, not axe-core)
+  3.1.1  Language of Page             → semantic_agent (checks <html lang> from crawl data)
+
+NEVER include 1.3.1, 2.4.2, or 3.1.1 findings. All three are owned by the
+semantic agent which uses reliable crawl data. axe-core's landmark, document-title,
+and html-has-lang rules can false-positive on bot-protected sites and Next.js SSR
+placeholder pages — do not pass them through.
 """
 
 aria_agent = Agent(

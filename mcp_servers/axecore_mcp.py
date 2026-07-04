@@ -166,7 +166,40 @@ async def _tool_run_axe_scan(arguments: dict) -> list[TextContent]:
         browser_context = await browser.new_context(
             accept_downloads=False,
             permissions=[],
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"
+            ),
+            viewport={"width": 1280, "height": 800},
+            locale="en-AU",
         )
+        # Stealth init — same script as browser_mcp._make_sandboxed_page.
+        # navigator.webdriver alone isn't sufficient; Cloudflare-style WAFs also
+        # check plugins count, window.chrome presence, and permissions behaviour.
+        await browser_context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => Object.assign(
+                    [
+                        {name:'Chrome PDF Plugin', filename:'internal-pdf-viewer', description:''},
+                        {name:'Chrome PDF Viewer', filename:'mhjfbmdgcfjbbpaeojofohoefgiehjai', description:''},
+                        {name:'Native Client', filename:'internal-nacl-plugin', description:''},
+                    ],
+                    {item: function(i){return this[i];}, namedItem: function(n){return null;}, refresh: function(){}}
+                )
+            });
+            if (!window.chrome) {
+                window.chrome = {runtime: {}, loadTimes: function(){}, csi: function(){}, app: {}};
+            }
+            if (navigator.permissions && navigator.permissions.query) {
+                const _origQuery = navigator.permissions.query.bind(navigator.permissions);
+                navigator.permissions.query = (params) =>
+                    params && params.name === 'notifications'
+                        ? Promise.resolve({state: 'default', onchange: null})
+                        : _origQuery(params);
+            }
+        """)
         page = await browser_context.new_page()
 
         try:
