@@ -43,6 +43,7 @@ from google.adk.runners import InMemoryRunner
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
+from agents.mcp_tools       import child_env
 from agents.crawler_agent   import crawler_agent, structure_dom_data, detect_spa_and_suggest_retry, parse_html_for_audit
 from agents.contrast_agent  import contrast_agent
 from agents.semantic_agent  import semantic_agent, run_semantic_checks_direct
@@ -193,6 +194,7 @@ async def _crawl_page(url: str) -> dict:
     params = StdioServerParameters(
         command=sys.executable,
         args=[_BROWSER_MCP],
+        env=child_env(),
     )
 
     async with stdio_client(params) as (read, write):

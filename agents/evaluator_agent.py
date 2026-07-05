@@ -236,11 +236,13 @@ def capture_screenshot_evidence(url: str, element_selector: str = "") -> str:
     from mcp.client.stdio import stdio_client
     import sys
     from pathlib import Path
+    from agents.mcp_tools import child_env
 
     async def _take_screenshot():
         params = StdioServerParameters(
             command=sys.executable,
             args=[str(Path(__file__).parent.parent / "mcp_servers" / "screenshot_mcp.py")],
+            env=child_env(),
         )
         try:
             async with stdio_client(params) as (read, write):
