@@ -90,19 +90,24 @@ def main() -> None:
     # these packages are preserved, so the stdio MCP subprocess launch keeps
     # resolving mcp_servers/browser_mcp.py exactly as it does locally. The
     # install script must be uploaded here too so build_options can run it.
+    # The install script MUST be under a top-level "installation_scripts/" dir
+    # and listed in extra_packages — the SDK only executes scripts whose path
+    # starts with "installation_scripts" (validate_installation_scripts_or_raise).
     extra_packages = [
         "agent_engine_app.py",
         "agents",
         "mcp_servers",
         "report",
-        "deploy/installation_scripts/install.sh",
+        "installation_scripts/install.sh",
     ]
 
-    # Build-time Chromium install. Key is "installation" (verified against the
-    # installed google-cloud-aiplatform 1.159.0 create() docstring); the path
-    # must match its entry in extra_packages above.
+    # Build-time Chromium install. Key is "installation_scripts" — verified
+    # against the SDK source (_agent_engines.py:98 _BUILD_OPTIONS_INSTALLATION,
+    # used as the build_options key at line 1176). The create() DOCSTRING says
+    # "installation", but that key is silently ignored — the code reads
+    # "installation_scripts". Path must match its extra_packages entry.
     build_options = {
-        "installation": ["deploy/installation_scripts/install.sh"],
+        "installation_scripts": ["installation_scripts/install.sh"],
     }
 
     common_kwargs = dict(
