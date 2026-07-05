@@ -120,14 +120,20 @@ Three layers of evaluation are implemented.
 
 ## Results
 
-Running the agent against [example URL from your demo recording] produces:
+Querying the **live Agent Engine endpoint** against `https://example.com` produces:
 
 - Full audit in under 90 seconds
-- [N] findings across [N] WCAG criteria
-- Overall score: [score]/100
-- Top finding: [one-line summary of the most impactful issue found]
+- 2 findings across 1 WCAG criterion (1.3.1 Info and Relationships)
+- Overall score: 93/100 (Grade A) — WCAG 2.1 AA fail
+- Top finding: missing `main` landmark region — forces screen-reader users through repetitive header content on every page
+
+The identical report is produced by the local CLI and by the deployed cloud
+endpoint, confirming the deployment is faithful. Richer real-world runs (local)
+score the W3C "before" demo at 81/100 and gumtree.com.au at 66/100.
 
 The contrast between the raw axe-core JSON output (shown in the video's opening 45 seconds) and the prioritised Markdown report (shown at the 2:30 mark) makes the value proposition immediate and legible to a non-technical audience.
+
+**Live endpoint:** `projects/947165968965/locations/us-central1/reasoningEngines/5832845963433082880` (Vertex AI Agent Engine, `us-central1`)
 
 ---
 
