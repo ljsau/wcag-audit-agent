@@ -17,7 +17,11 @@ from google.adk.tools import McpToolset
 from google.adk.tools.mcp_tool.mcp_toolset import StdioConnectionParams
 
 _MCP_DIR = Path(__file__).parent.parent / "mcp_servers"
-_MCP_TIMEOUT = 60.0
+# Axe-core scans of heavy real-world pages can take minutes (page must reach
+# networkidle, then axe injects + runs). 300s per the observed need; the
+# page-load ceiling (BROWSER_MCP_TIMEOUT_MS, default raised below) sits under
+# this so axe has room to run within the window.
+_MCP_TIMEOUT = 300.0
 
 
 def child_env() -> dict:

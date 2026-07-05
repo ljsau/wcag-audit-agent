@@ -204,7 +204,12 @@ async def _tool_run_axe_scan(arguments: dict) -> list[TextContent]:
 
         try:
             try:
-                await page.goto(url, wait_until="networkidle",
+                # wait_until="load" (not "networkidle"): axe needs the DOM,
+                # stylesheets, and images loaded (for contrast/alt checks), but
+                # "networkidle" can hang for minutes on pages with continuous
+                # background requests (analytics, trackers), timing out before
+                # axe ever runs. "load" fires as soon as page resources finish.
+                await page.goto(url, wait_until="load",
                                 timeout=PAGE_TIMEOUT_MS)
             except PlaywrightTimeout:
                 await browser.close()
