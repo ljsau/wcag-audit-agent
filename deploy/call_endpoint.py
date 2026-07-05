@@ -18,6 +18,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+# Reports contain emoji (e.g. 🟢); Windows consoles default to cp1252.
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(_REPO_ROOT / ".env")
 

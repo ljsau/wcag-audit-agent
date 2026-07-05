@@ -76,6 +76,11 @@ def main() -> None:
 
     vertexai.init(project=project, location=location, staging_bucket=staging_bucket)
 
+    # The SDK resolves extra_packages / build_options paths relative to the
+    # current working directory, so anchor CWD at the repo root and use
+    # repo-relative paths from here on (matches the documented convention).
+    os.chdir(_REPO_ROOT)
+
     from agent_engine_app import WcagAuditEngine
 
     requirements = (_REPO_ROOT / "deploy" / "requirements.txt").read_text().splitlines()
@@ -83,29 +88,33 @@ def main() -> None:
 
     # Everything the remote runtime must import / spawn. Relative paths inside
     # these packages are preserved, so the stdio MCP subprocess launch keeps
-    # resolving mcp_servers/browser_mcp.py exactly as it does locally.
+    # resolving mcp_servers/browser_mcp.py exactly as it does locally. The
+    # install script must be uploaded here too so build_options can run it.
     extra_packages = [
-        str(_REPO_ROOT / "agent_engine_app.py"),
-        str(_REPO_ROOT / "agents"),
-        str(_REPO_ROOT / "mcp_servers"),
-        str(_REPO_ROOT / "report"),
+        "agent_engine_app.py",
+        "agents",
+        "mcp_servers",
+        "report",
+        "deploy/installation_scripts/install.sh",
     ]
 
-    # --- FLAGGED LINE 1: build-time Chromium install --------------------------
+    # Build-time Chromium install. Key is "installation" (verified against the
+    # installed google-cloud-aiplatform 1.159.0 create() docstring); the path
+    # must match its entry in extra_packages above.
     build_options = {
-        "installation_scripts": ["deploy/installation_scripts/install.sh"],
+        "installation": ["deploy/installation_scripts/install.sh"],
     }
-    # -------------------------------------------------------------------------
 
     common_kwargs = dict(
         requirements=requirements,
         extra_packages=extra_packages,
         display_name=args.display_name,
-        # Chromium needs headroom; give the instance ≥2 GB.
-        env_vars={"GOOGLE_API_KEY": google_api_key},
-        # --- FLAGGED LINE 2: pass build_options if supported by your SDK -----
+        # PLAYWRIGHT_BROWSERS_PATH=0 must match install.sh so the runtime user
+        # finds the browser installed at build time (in site-packages, not $HOME).
+        env_vars={"GOOGLE_API_KEY": google_api_key, "PLAYWRIGHT_BROWSERS_PATH": "0"},
         build_options=build_options,
-        # --------------------------------------------------------------------
+        # Headless Chromium needs headroom — default 1 vCPU can OOM mid-audit.
+        resource_limits={"cpu": "4", "memory": "8Gi"},
     )
 
     print(f"[deploy] project={project} location={location}")

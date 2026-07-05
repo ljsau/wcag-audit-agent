@@ -9,6 +9,13 @@
 # Referenced from deploy/deploy.py via build_options.installation_scripts.
 set -euo pipefail
 
-echo "[install.sh] Installing Playwright Chromium + system deps..."
+# PLAYWRIGHT_BROWSERS_PATH=0 installs the browser INTO the pip package
+# (site-packages), not $HOME/.cache. The build runs as one user (root) and the
+# runtime as another (appuser); a $HOME-based cache would be invisible to the
+# runtime user. site-packages is shared, so both find the same binary. The
+# runtime must set the SAME env var (see deploy.py env_vars).
+export PLAYWRIGHT_BROWSERS_PATH=0
+
+echo "[install.sh] Installing Playwright Chromium + system deps (PLAYWRIGHT_BROWSERS_PATH=0)..."
 python -m playwright install --with-deps chromium
 echo "[install.sh] Chromium install complete."
