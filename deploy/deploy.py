@@ -114,9 +114,14 @@ def main() -> None:
         requirements=requirements,
         extra_packages=extra_packages,
         display_name=args.display_name,
-        # PLAYWRIGHT_BROWSERS_PATH=0 must match install.sh so the runtime user
-        # finds the browser installed at build time (in site-packages, not $HOME).
-        env_vars={"GOOGLE_API_KEY": google_api_key, "PLAYWRIGHT_BROWSERS_PATH": "0"},
+        # PLAYWRIGHT_BROWSERS_PATH must match install.sh's fixed path so the
+        # runtime venv Playwright finds the browser the build installed there.
+        # (Not "0": build-time and runtime use different Python interpreters, so
+        # a per-interpreter site-packages path would not be shared.)
+        env_vars={
+            "GOOGLE_API_KEY": google_api_key,
+            "PLAYWRIGHT_BROWSERS_PATH": "/opt/pw-browsers",
+        },
         build_options=build_options,
         # Headless Chromium needs headroom — default 1 vCPU can OOM mid-audit.
         resource_limits={"cpu": "4", "memory": "8Gi"},

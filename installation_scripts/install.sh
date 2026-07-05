@@ -1,25 +1,31 @@
 #!/usr/bin/env bash
 # Build-time install script for the Agent Engine container.
 #
-# Runs during image build, before the agent starts, in the same environment
-# where pip requirements are installed. Installs the headless Chromium binary
-# AND its system libraries (libnss3, libatk-bridge2.0, libgbm, fonts, ...),
-# which the Playwright pip package alone does NOT provide.
+# CRITICAL ORDERING FACT: Agent Engine runs installation_scripts at Dockerfile
+# step 16 (as root), BEFORE pip installs the app requirements into /code/.venv
+# at step 19. So `playwright` is NOT importable when this runs — we must pip
+# install it ourselves here. And because the runtime venv is a *different*
+# Python from this build-time system Python, we install the browser into a
+# FIXED, shared, absolute path (not PLAYWRIGHT_BROWSERS_PATH=0, which would put
+# it inside whichever interpreter's site-packages). The runtime sets the same
+# PLAYWRIGHT_BROWSERS_PATH (see deploy.py env_vars) so its venv Playwright finds
+# the browser here.
 #
-# MUST live in a top-level `installation_scripts/` directory and be referenced
-# from deploy.py via build_options["installation_scripts"] — the SDK only runs
-# scripts whose path starts with "installation_scripts" (see
-# vertexai/agent_engines/_utils.py:validate_installation_scripts_or_raise).
+# The playwright version is pinned to match deploy/requirements.txt so the
+# browser build number matches what the runtime Playwright expects.
 set -euo pipefail
 
-# PLAYWRIGHT_BROWSERS_PATH=0 installs the browser INTO the pip package
-# (site-packages), not $HOME/.cache. The build runs as one user (root) and the
-# runtime as another (appuser); a $HOME-based cache would be invisible to the
-# runtime user. site-packages is shared, so both find the same binary. The
-# runtime must set the SAME env var, forwarded to the MCP subprocess via
-# child_env() (see deploy.py env_vars + agents/mcp_tools.py).
-export PLAYWRIGHT_BROWSERS_PATH=0
+export PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+PW_VERSION="1.61.0"
 
-echo "[install.sh] Installing Playwright Chromium + system deps (PLAYWRIGHT_BROWSERS_PATH=0)..."
+echo "[install.sh] pip installing playwright==${PW_VERSION} (build-time CLI for browser download)..."
+python -m pip install --quiet "playwright==${PW_VERSION}"
+
+echo "[install.sh] Installing Chromium + system libs into ${PLAYWRIGHT_BROWSERS_PATH} (running as root)..."
 python -m playwright install --with-deps chromium
+
+echo "[install.sh] Making browsers traversable/readable for the runtime user..."
+chmod -R a+rX "${PLAYWRIGHT_BROWSERS_PATH}"
+
 echo "[install.sh] Chromium install complete."
+ls -la "${PLAYWRIGHT_BROWSERS_PATH}" || true
